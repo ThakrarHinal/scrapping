@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+selenium
+webdriver-manager
+boto3
+opencv-python
+python-dotenv
