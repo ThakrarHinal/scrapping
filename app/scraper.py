@@ -2,12 +2,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
 import time
-import cv2
 import boto3
+import requests
+import cv2
+import numpy as np
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 
 # Initialize FastAPI app
@@ -26,60 +28,63 @@ def generate_s3_url(bucket, region, file_key):
 
 def setup_driver():
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--headless")  
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
 
-# @app.post("/scrape/")  # Changed to POST to accept JSON body
+# @app.post("/scrape/")
 def capture_and_upload(url: str):
     driver = setup_driver()
-    uploaded_urls = {"frames": [], "video": None}
+    uploaded_urls = []
+    image_files = []
 
     try:
-        driver.get(url)  # Use URL from request body
-        time.sleep(5)
+        driver.get(url)
+        time.sleep(3)  # Allow initial load
 
-        rotation_area = driver.find_element("tag name", "canvas")
-        action = ActionChains(driver)
+        # Scroll multiple times to load all images
+        for _ in range(5):  # Increase this value if images are missing
+            driver.execute_script("window.scrollBy(0, document.body.scrollHeight / 4);")
+            time.sleep(2)
 
-        frame_files = []
-        for i in range(36):
-            action.click_and_hold(rotation_area).move_by_offset(10, 0).release().perform()
-            time.sleep(0.2)
-            frame_file = f"frame_{i:03d}.png"
-            driver.save_screenshot(frame_file)
+        images = driver.find_elements(By.TAG_NAME, "img")
+        if not images:
+            raise HTTPException(status_code=404, detail="No images found on the page.")
 
-            if not os.path.exists(frame_file):
-                continue
+        for idx, img in enumerate(images):
+            src = img.get_attribute("src")
+            if src and src.startswith("http"):
+                print(f"Downloading Image: {src}")
 
-            frame_files.append(frame_file)
-            s3_key = f"frames/{frame_file}"
-            s3_client.upload_file(frame_file, S3_BUCKET_NAME, s3_key)
-            uploaded_urls["frames"].append(generate_s3_url(S3_BUCKET_NAME, S3_REGION, s3_key))
+                image_filename = f"image_{idx}.jpg"
+                response = requests.get(src, stream=True)
 
-        if not frame_files:
-            raise HTTPException(status_code=500, detail="No frames were captured.")
+                if response.status_code == 200:
+                    with open(image_filename, "wb") as file:
+                        for chunk in response.iter_content(1024):
+                            file.write(chunk)
 
-        first_frame = cv2.imread(frame_files[0])
-        height, width, _ = first_frame.shape
-        output_video = "360_view_video.mp4"
-        video = cv2.VideoWriter(output_video, cv2.VideoWriter_fourcc(*"mp4v"), 30, (width, height))
+                    # Verify OpenCV can read the image
+                    img_cv = cv2.imread(image_filename)
+                    if img_cv is not None:
+                        # Resize to a standard resolution (e.g., 1280x720)
+                        img_resized = cv2.resize(img_cv, (1280, 720))
+                        cv2.imwrite(image_filename, img_resized)
 
-        for frame_file in frame_files:
-            frame = cv2.imread(frame_file)
-            if frame is not None:
-                video.write(frame)
+                        image_files.append(image_filename)
 
-        video.release()
-        s3_video_key = f"videos/{output_video}"
-        s3_client.upload_file(output_video, S3_BUCKET_NAME, s3_video_key)
-        uploaded_urls["video"] = generate_s3_url(S3_BUCKET_NAME, S3_REGION, s3_video_key)
+                        # Upload to S3 with correct content type
+                        s3_key = f"images/{image_filename}"
+                        s3_client.upload_file(image_filename, S3_BUCKET_NAME, s3_key, ExtraArgs={"ContentType": "image/jpeg"})
+                        uploaded_urls.append(generate_s3_url(S3_BUCKET_NAME, S3_REGION, s3_key))
 
-        os.remove(output_video)
-        os.remove(frame_file)
-
+        # Cleanup image files
+        for img_file in image_files:
+            os.remove(img_file)
+    
     finally:
         driver.quit()
 
-    return uploaded_urls
+    return {"images": uploaded_urls}
