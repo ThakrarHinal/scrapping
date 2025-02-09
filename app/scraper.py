@@ -75,13 +75,14 @@ def capture_and_upload(url: str):
 
                         image_files.append(image_filename)
 
-                        # Upload to S3 with correct content type
-                        s3_key = f"images/{image_filename}"
-                        s3_client.upload_file(image_filename, S3_BUCKET_NAME, s3_key, ExtraArgs={"ContentType": "image/jpeg"})
-                        uploaded_urls.append(generate_s3_url(S3_BUCKET_NAME, S3_REGION, s3_key))
+                       
 
         # Cleanup image files
         for img_file in image_files:
+             # Upload to S3 with correct content type
+            s3_key = f"images/{img_file}"
+            s3_client.upload_file(img_file, S3_BUCKET_NAME, s3_key, ExtraArgs={"ContentType": "image/jpeg"})
+            uploaded_urls.append(generate_s3_url(S3_BUCKET_NAME, S3_REGION, s3_key))
             os.remove(img_file)
     
     finally:
