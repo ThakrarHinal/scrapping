@@ -4,8 +4,8 @@ import os
 import time
 import boto3
 import requests
-import cv2
-import numpy as np
+import io
+from concurrent.futures import ThreadPoolExecutor
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -28,63 +28,55 @@ def generate_s3_url(bucket, region, file_key):
 
 def setup_driver():
     chrome_options = Options()
-    chrome_options.add_argument("--headless")  
+    chrome_options.add_argument("--headless")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
 
+def scroll_page(driver):
+    last_height = driver.execute_script("return document.body.scrollHeight")
+    for _ in range(3):  # Reduce excessive scrolling
+        driver.execute_script("window.scrollBy(0, document.body.scrollHeight / 2);")
+        time.sleep(2)
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        if new_height == last_height:
+            break
+        last_height = new_height
+
+def download_and_upload_image(src, idx):
+    try:
+        response = requests.get(src, stream=True, timeout=5)
+        if response.status_code == 200:
+            image_data = io.BytesIO(response.content)
+            s3_key = f"images/image_{idx}.jpg"
+            s3_client.upload_fileobj(image_data, S3_BUCKET_NAME, s3_key, ExtraArgs={"ContentType": "image/jpeg"})
+            return generate_s3_url(S3_BUCKET_NAME, S3_REGION, s3_key)
+    except Exception as e:
+        print(f"Failed to download {src}: {e}")
+    return None
+
 # @app.post("/scrape/")
 def capture_and_upload(url: str):
     driver = setup_driver()
     uploaded_urls = []
-    image_files = []
 
     try:
         driver.get(url)
-        time.sleep(3)  # Allow initial load
+        time.sleep(3)  # Allow page to load
 
-        # Scroll multiple times to load all images
-        for _ in range(5):  # Increase this value if images are missing
-            driver.execute_script("window.scrollBy(0, document.body.scrollHeight / 4);")
-            time.sleep(2)
+        scroll_page(driver)  # Optimized scrolling
 
         images = driver.find_elements(By.TAG_NAME, "img")
         if not images:
             raise HTTPException(status_code=404, detail="No images found on the page.")
 
-        for idx, img in enumerate(images):
-            src = img.get_attribute("src")
-            if src and src.startswith("http"):
+        image_sources = [img.get_attribute("src") for img in images if img.get_attribute("src") and img.get_attribute("src").startswith("http")]
 
-                image_filename = f"image_{idx}.jpg"
-                response = requests.get(src, stream=True)
+        # Use threading to speed up downloads and uploads
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            uploaded_urls = list(filter(None, executor.map(download_and_upload_image, image_sources, range(len(image_sources)))))
 
-                if response.status_code == 200:
-                    with open(image_filename, "wb") as file:
-                        for chunk in response.iter_content(1024):
-                            file.write(chunk)
-
-                    # Verify OpenCV can read the image
-                    # img_cv = cv2.imread(image_filename)
-                    # if img_cv is not None:
-                    #     # Resize to a standard resolution (e.g., 1280x720)
-                    #     img_resized = cv2.resize(img_cv, (1280, 720))
-                    #     cv2.imwrite(image_filename, img_resized)
-
-                        image_files.append(image_filename)
-                        # print("checking time>>>>")
-
-                       
-
-        # Cleanup image files
-        for img_file in image_files:
-             # Upload to S3 with correct content type
-            s3_key = f"images/{img_file}"
-            s3_client.upload_file(img_file, S3_BUCKET_NAME, s3_key, ExtraArgs={"ContentType": "image/jpeg"})
-            uploaded_urls.append(generate_s3_url(S3_BUCKET_NAME, S3_REGION, s3_key))
-            os.remove(img_file)
-    
     finally:
         driver.quit()
 
