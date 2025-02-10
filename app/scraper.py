@@ -72,7 +72,7 @@ def capture_and_upload(url: str):
                     #     img_resized = cv2.resize(img_cv, (1280, 720))
                     #     cv2.imwrite(image_filename, img_resized)
 
-                    #     image_files.append(image_filename)
+                        image_files.append(image_filename)
                         # print("checking time>>>>")
 
                        
