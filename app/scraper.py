@@ -56,7 +56,6 @@ def capture_and_upload(url: str):
         for idx, img in enumerate(images):
             src = img.get_attribute("src")
             if src and src.startswith("http"):
-                print(f"Downloading Image: {src}")
 
                 image_filename = f"image_{idx}.jpg"
                 response = requests.get(src, stream=True)
@@ -67,13 +66,14 @@ def capture_and_upload(url: str):
                             file.write(chunk)
 
                     # Verify OpenCV can read the image
-                    img_cv = cv2.imread(image_filename)
-                    if img_cv is not None:
-                        # Resize to a standard resolution (e.g., 1280x720)
-                        img_resized = cv2.resize(img_cv, (1280, 720))
-                        cv2.imwrite(image_filename, img_resized)
+                    # img_cv = cv2.imread(image_filename)
+                    # if img_cv is not None:
+                    #     # Resize to a standard resolution (e.g., 1280x720)
+                    #     img_resized = cv2.resize(img_cv, (1280, 720))
+                    #     cv2.imwrite(image_filename, img_resized)
 
-                        image_files.append(image_filename)
+                    #     image_files.append(image_filename)
+                        # print("checking time>>>>")
 
                        
 
